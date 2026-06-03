@@ -52,7 +52,7 @@ func New(ctx context.Context, dialect, address string, log waLog.Logger) (*Conta
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
-	db.SetConnMaxIdleTime(1 * time.Minute)
+	db.SetConnMaxIdleTime(10 * time.Minute)
 	container := NewWithDB(db, dialect, log)
 	err = container.Upgrade(ctx)
 	if err != nil {
