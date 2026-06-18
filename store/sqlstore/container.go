@@ -28,9 +28,10 @@ import (
 
 // Container is a wrapper for a SQL database that can contain multiple whatsmeow sessions.
 type Container struct {
-	db     *dbutil.Database
-	log    waLog.Logger
+	db *dbutil.Database
+	log waLog.Logger
 	LIDMap *CachedLIDMap
+	owned bool
 }
 
 var _ store.DeviceContainer = (*Container)(nil)
@@ -51,9 +52,10 @@ func New(ctx context.Context, dialect, address string, log waLog.Logger) (*Conta
 	}
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
-	db.SetConnMaxIdleTime(10 * time.Minute)
+	db.SetConnMaxLifetime(24 * time.Hour)
+	db.SetConnMaxIdleTime(24 * time.Hour)
 	container := NewWithDB(db, dialect, log)
+	container.owned = true
 	err = container.Upgrade(ctx)
 	if err != nil {
 		_ = container.Close()
@@ -232,7 +234,7 @@ var ErrDeviceIDMustBeSet = errors.New("device JID must be known before accessing
 
 // Close will close the container's database
 func (c *Container) Close() error {
-	if c != nil && c.db != nil {
+	if c != nil && c.db != nil && c.owned {
 		return c.db.Close()
 	}
 	return nil
