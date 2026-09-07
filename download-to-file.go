@@ -125,7 +125,11 @@ func (cli *Client) downloadAndDecryptToFile(
 	// Mesmo predicado do caminho em memoria: cifra e `mediaKey`, nao `fileEncSHA256`.
 	if mac, err := cli.downloadPossiblyEncryptedMediaWithRetriesToFile(ctx, url, mediaKey != nil, fileEncSHA256, file); err != nil {
 		return err
-	} else if mediaKey == nil && fileEncSHA256 == nil && mac == nil {
+	// ⛔ Mesma correccao do gemeo em memoria: `mediaKey == nil` sozinho. Ver
+	// `download.go` para a razao por extenso — sem chave nao ha decifra possivel, e a
+	// condicao tripla mandava a media sem chave mas COM hash para o `validateMediaFile`,
+	// que derivava um macKey de uma chave nula.
+	} else if mediaKey == nil {
 		// Unencrypted media, just check the hash and return
 		if fileSHA256 == nil {
 			return nil

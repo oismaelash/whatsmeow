@@ -215,8 +215,19 @@ func (int *DangerousInternalClient) DownloadAndDecrypt(ctx context.Context, url 
 	return int.c.downloadAndDecrypt(ctx, url, mediaKey, appInfo, fileEncSHA256, fileSHA256)
 }
 
-func (int *DangerousInternalClient) DownloadPossiblyEncryptedMediaWithRetries(ctx context.Context, url string, checksum []byte) (file, mac []byte, err error) {
-	return int.c.downloadPossiblyEncryptedMediaWithRetries(ctx, url, checksum != nil, checksum)
+// ⛔ `encrypted` E PARAMETRO NOVO, E A ASSINATURA MUDOU DE PROPOSITO.
+//
+// Ate 2026-09-07 este wrapper derivava o ramo de `checksum != nil` — o mesmo predicado
+// errado do resto da lib. A consequencia aqui era PIOR do que nos caminhos validados:
+// como este wrapper nao valida HMAC nenhum, uma media cifrada sem `fileEncSHA256`
+// devolvia os bytes com os 10 do MAC AINDA COLADOS na cauda, `mac` nil, e **erro nenhum**.
+// Falha silenciosa, nao perda — quem consumisse gravava um ficheiro corrompido.
+//
+// ⚠️ Quebrar a assinatura foi decidido depois de verificar que NINGUEM a consome: nem o
+// repo pai (`evolution-api-go`), nem a lib viva. Os unicos resultados de `grep` estavam
+// na copia morta `whatsmeow-lib/`, que o `go.mod` nao substitui.
+func (int *DangerousInternalClient) DownloadPossiblyEncryptedMediaWithRetries(ctx context.Context, url string, encrypted bool, checksum []byte) (file, mac []byte, err error) {
+	return int.c.downloadPossiblyEncryptedMediaWithRetries(ctx, url, encrypted, checksum)
 }
 
 func (int *DangerousInternalClient) DoMediaDownloadRequest(ctx context.Context, url string) (*http.Response, error) {
@@ -235,8 +246,9 @@ func (int *DangerousInternalClient) DownloadAndDecryptToFile(ctx context.Context
 	return int.c.downloadAndDecryptToFile(ctx, url, mediaKey, appInfo, fileEncSHA256, fileSHA256, file)
 }
 
-func (int *DangerousInternalClient) DownloadPossiblyEncryptedMediaWithRetriesToFile(ctx context.Context, url string, checksum []byte, file File) (mac []byte, err error) {
-	return int.c.downloadPossiblyEncryptedMediaWithRetriesToFile(ctx, url, checksum != nil, checksum, file)
+// O gemeo em ficheiro, mesma mudanca e mesma razao — ver acima.
+func (int *DangerousInternalClient) DownloadPossiblyEncryptedMediaWithRetriesToFile(ctx context.Context, url string, encrypted bool, checksum []byte, file File) (mac []byte, err error) {
+	return int.c.downloadPossiblyEncryptedMediaWithRetriesToFile(ctx, url, encrypted, checksum, file)
 }
 
 func (int *DangerousInternalClient) DownloadMediaToFile(ctx context.Context, url string, file io.Writer) (int64, []byte, error) {

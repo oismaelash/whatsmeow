@@ -292,7 +292,19 @@ func (cli *Client) downloadAndDecrypt(
 	// ⛔ `mediaKey != nil` E O PREDICADO, NAO `fileEncSHA256 != nil`. Ver o helper abaixo.
 	if ciphertext, mac, err = cli.downloadPossiblyEncryptedMediaWithRetries(ctx, url, mediaKey != nil, fileEncSHA256); err != nil {
 
-	} else if mediaKey == nil && fileEncSHA256 == nil && mac == nil {
+	} else if mediaKey == nil {
+		// ⛔ SEM CHAVE NAO HA DECIFRA POSSIVEL, e a condicao era tripla de mais.
+		//
+		// Ate 2026-09-07 este escape exigia tambem `fileEncSHA256 == nil && mac == nil`.
+		// Resultado: uma mensagem SEM `mediaKey` mas COM `fileEncSHA256` nao escapava por
+		// aqui — caia no `validateMedia` abaixo, que derivava um `macKey` de uma chave
+		// NULA via `getMediaKeys(nil, ...)` e comparava contra ele. Falhava sempre, com o
+		// mesmo `ErrInvalidMediaHMAC` do outro defeito, o que tornava os dois
+		// indistinguiveis no log.
+		//
+		// `mediaKey == nil` sozinho e a condicao certa: sem chave, os bytes so podem ser
+		// claros, haja ou nao hash de integridade. As outras duas eram consequencia,
+		// nao requisito.
 		// Unencrypted media, just check the hash and return
 		data = ciphertext
 		if fileSHA256 != nil && (len(fileSHA256) != 32 || sha256.Sum256(data) != *(*[32]byte)(fileSHA256)) {
