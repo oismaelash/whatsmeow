@@ -216,7 +216,7 @@ func (int *DangerousInternalClient) DownloadAndDecrypt(ctx context.Context, url 
 }
 
 func (int *DangerousInternalClient) DownloadPossiblyEncryptedMediaWithRetries(ctx context.Context, url string, checksum []byte) (file, mac []byte, err error) {
-	return int.c.downloadPossiblyEncryptedMediaWithRetries(ctx, url, checksum)
+	return int.c.downloadPossiblyEncryptedMediaWithRetries(ctx, url, checksum != nil, checksum)
 }
 
 func (int *DangerousInternalClient) DoMediaDownloadRequest(ctx context.Context, url string) (*http.Response, error) {
@@ -236,7 +236,7 @@ func (int *DangerousInternalClient) DownloadAndDecryptToFile(ctx context.Context
 }
 
 func (int *DangerousInternalClient) DownloadPossiblyEncryptedMediaWithRetriesToFile(ctx context.Context, url string, checksum []byte, file File) (mac []byte, err error) {
-	return int.c.downloadPossiblyEncryptedMediaWithRetriesToFile(ctx, url, checksum, file)
+	return int.c.downloadPossiblyEncryptedMediaWithRetriesToFile(ctx, url, checksum != nil, checksum, file)
 }
 
 func (int *DangerousInternalClient) DownloadMediaToFile(ctx context.Context, url string, file io.Writer) (int64, []byte, error) {

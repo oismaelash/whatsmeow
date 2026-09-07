@@ -289,7 +289,8 @@ func (cli *Client) downloadAndDecrypt(
 ) (data []byte, err error) {
 	iv, cipherKey, macKey, _ := getMediaKeys(mediaKey, appInfo)
 	var ciphertext, mac []byte
-	if ciphertext, mac, err = cli.downloadPossiblyEncryptedMediaWithRetries(ctx, url, fileEncSHA256); err != nil {
+	// ⛔ `mediaKey != nil` E O PREDICADO, NAO `fileEncSHA256 != nil`. Ver o helper abaixo.
+	if ciphertext, mac, err = cli.downloadPossiblyEncryptedMediaWithRetries(ctx, url, mediaKey != nil, fileEncSHA256); err != nil {
 
 	} else if mediaKey == nil && fileEncSHA256 == nil && mac == nil {
 		// Unencrypted media, just check the hash and return
@@ -323,9 +324,26 @@ func shouldRetryMediaDownload(err error) bool {
 		(errors.As(err, &httpErr) && retryafter.Should(httpErr.StatusCode, true))
 }
 
-func (cli *Client) downloadPossiblyEncryptedMediaWithRetries(ctx context.Context, url string, checksum []byte) (file, mac []byte, err error) {
+// ⛔ `encrypted` E UM PARAMETRO PROPRIO PORQUE O PREDICADO ANTIGO ESTAVA ERRADO.
+//
+// Ate 2026-09-07 este ramo decidia por `checksum == nil` — ou seja, tratava "nao tenho
+// hash de integridade" como "nao esta cifrado". Sao coisas diferentes: uma mensagem que
+// REFERENCIA media ja existente (reencaminhada, ou com `thumbnailDirectPath` e sem `URL`)
+// chega com `mediaKey` e SEM `fileEncSHA256`, porque quem a enviou nao foi quem a cifrou.
+//
+// Com o predicado antigo essa mensagem tomava o ramo simples: os 10 bytes finais do MAC
+// nunca eram separados, `mac` ficava nil, e `validateMedia` comparava contra nil ->
+// ErrInvalidMediaHMAC, em TODOS os hosts, para sempre. Medido em producao (07/09/2026):
+// 54 de 56 falhas de media de entrada tinham `thumbnailDirectPath`; entre as mensagens
+// com esse campo, 31% perdiam-se. O nome do erro engana — o HMAC nao estava errado, nao
+// tinha sido extraido.
+//
+// ⚠️ E o defeito era maior do que o erro que reportava: como o MAC ficava DENTRO do
+// ciphertext, quem "consertasse" apenas a validacao do HMAC obteria media CORROMPIDA em
+// silencio, que e pior do que a perda.
+func (cli *Client) downloadPossiblyEncryptedMediaWithRetries(ctx context.Context, url string, encrypted bool, checksum []byte) (file, mac []byte, err error) {
 	for retryNum := 0; retryNum < 5; retryNum++ {
-		if checksum == nil {
+		if !encrypted {
 			file, err = cli.downloadMedia(ctx, url)
 		} else {
 			file, mac, err = cli.downloadEncryptedMedia(ctx, url, checksum)
@@ -382,8 +400,19 @@ func (cli *Client) downloadMedia(ctx context.Context, url string) ([]byte, error
 
 const mediaHMACLength = 10
 
+// ⚠️ `checksum` NIL E LEGITIMO, e a consequencia esta declarada aqui de proposito.
+//
+// Esta funcao faz DUAS coisas: separa o MAC dos bytes E verifica o `fileEncSHA256`. Com
+// checksum nil continua a separar o MAC — que e o que torna a decifra possivel — e SALTA
+// a verificacao de integridade do blob cifrado, porque nao ha hash contra o qual verificar.
+//
+// ⛔ Isso e MENOS verificacao do que o caminho normal, e e aceite conscientemente: o HMAC
+// continua a proteger contra bytes adulterados; o que se perde e a deteccao precoce de um
+// download corrompido, que passa a aparecer como ErrInvalidMediaHMAC em vez de
+// ErrInvalidMediaEncSHA256. A alternativa era recusar a media por completo, que e a perda
+// que este conserto existe para fechar. NAO restaurar a guarda sem reabrir esta decisao.
 func (cli *Client) downloadEncryptedMedia(ctx context.Context, url string, checksum []byte) (file, mac []byte, err error) {
-	if len(checksum) != 32 {
+	if checksum != nil && len(checksum) != 32 {
 		return nil, nil, fmt.Errorf("invalid checksum length: expected 32, got %d", len(checksum))
 	}
 	data, err := cli.downloadMedia(ctx, url)
@@ -394,7 +423,7 @@ func (cli *Client) downloadEncryptedMedia(ctx context.Context, url string, check
 		return
 	}
 	file, mac = data[:len(data)-mediaHMACLength], data[len(data)-mediaHMACLength:]
-	if sha256.Sum256(data) != *(*[32]byte)(checksum) {
+	if checksum != nil && sha256.Sum256(data) != *(*[32]byte)(checksum) {
 		err = ErrInvalidMediaEncSHA256
 	}
 	return

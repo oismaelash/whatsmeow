@@ -122,7 +122,8 @@ func (cli *Client) downloadAndDecryptToFile(
 ) error {
 	iv, cipherKey, macKey, _ := getMediaKeys(mediaKey, appInfo)
 	hasher := sha256.New()
-	if mac, err := cli.downloadPossiblyEncryptedMediaWithRetriesToFile(ctx, url, fileEncSHA256, file); err != nil {
+	// Mesmo predicado do caminho em memoria: cifra e `mediaKey`, nao `fileEncSHA256`.
+	if mac, err := cli.downloadPossiblyEncryptedMediaWithRetriesToFile(ctx, url, mediaKey != nil, fileEncSHA256, file); err != nil {
 		return err
 	} else if mediaKey == nil && fileEncSHA256 == nil && mac == nil {
 		// Unencrypted media, just check the hash and return
@@ -154,9 +155,13 @@ func (cli *Client) downloadAndDecryptToFile(
 	return nil
 }
 
-func (cli *Client) downloadPossiblyEncryptedMediaWithRetriesToFile(ctx context.Context, url string, checksum []byte, file File) (mac []byte, err error) {
+// O gemeo de `downloadPossiblyEncryptedMediaWithRetries`, para o caminho que escreve em
+// ficheiro. Tinha o MESMO defeito e por isso leva o MESMO conserto — ver o comentario la,
+// que e onde a razao esta escrita por extenso. Consertar so um dos dois deixaria a perda
+// viva por metade dos chamadores.
+func (cli *Client) downloadPossiblyEncryptedMediaWithRetriesToFile(ctx context.Context, url string, encrypted bool, checksum []byte, file File) (mac []byte, err error) {
 	for retryNum := 0; retryNum < 5; retryNum++ {
-		if checksum == nil {
+		if !encrypted {
 			_, _, err = cli.downloadMediaToFile(ctx, url, file)
 		} else {
 			mac, err = cli.downloadEncryptedMediaToFile(ctx, url, checksum, file)
@@ -201,8 +206,9 @@ func (cli *Client) downloadMediaToFile(ctx context.Context, url string, file io.
 	return n, hasher.Sum(nil), err
 }
 
+// `checksum` nil e legitimo — mesma decisao declarada em `downloadEncryptedMedia`.
 func (cli *Client) downloadEncryptedMediaToFile(ctx context.Context, url string, checksum []byte, file File) ([]byte, error) {
-	if len(checksum) != 32 {
+	if checksum != nil && len(checksum) != 32 {
 		return nil, fmt.Errorf("invalid checksum length: expected 32, got %d", len(checksum))
 	}
 	size, hash, err := cli.downloadMediaToFile(ctx, url, file)
