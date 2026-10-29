@@ -720,6 +720,24 @@ func (s *SQLStore) PutManyRedactedPhones(ctx context.Context, entries []store.Re
 	if origLen != len(entries) {
 		s.log.Warnf("%d duplicate contacts found in PutManyRedactedPhones", origLen-len(entries))
 	}
+	// PILOT-STATUS FORK (redacted-phones-batch): skip entries whose cached
+	// contact already has the same redacted phone (that row is known to hold the
+	// value, so the upsert would be a no-op), and write the rest sorted by JID so
+	// concurrent writers lock whatsmeow_contacts rows in the same order. Upstream
+	// wrote in input order, which deadlocked under concurrent group refreshes.
+	// The cache is only read here; no lock is held during the database I/O.
+	s.contactCacheLock.Lock()
+	entries = slices.DeleteFunc(entries, func(entry store.RedactedPhoneEntry) bool {
+		cached, ok := s.contactCache[entry.JID]
+		return ok && cached.Found && cached.RedactedPhone == entry.RedactedPhone
+	})
+	s.contactCacheLock.Unlock()
+	if len(entries) == 0 {
+		return nil
+	}
+	slices.SortFunc(entries, func(a, b store.RedactedPhoneEntry) int {
+		return strings.Compare(a.JID.String(), b.JID.String())
+	})
 	err := s.db.DoTxn(ctx, nil, func(ctx context.Context) error {
 		for slice := range slices.Chunk(entries, contactBatchSize) {
 			query, vars := putRedactedPhonesMassInsertBuilder.Build([1]any{s.JID}, slice)
