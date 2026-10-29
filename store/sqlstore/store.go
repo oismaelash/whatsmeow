@@ -204,11 +204,39 @@ func (s *SQLStore) GetManySessions(ctx context.Context, addresses []string) (map
 	return result, nil
 }
 
+// PILOT-STATUS FORK (sessions-batch): upstream ran one upsert per session (about
+// 800 round trips for a large group message). The same upsert is now sent as
+// multi-row statements, with addresses sorted so that concurrent writers for the
+// same device lock rows in the same order. The stored rows are identical.
+type sessionEntry struct {
+	Address string
+	Session []byte
+}
+
+func (se sessionEntry) GetMassInsertValues() [2]any {
+	return [...]any{se.Address, se.Session}
+}
+
+var putSessionsMassInsertBuilder = dbutil.NewMassInsertBuilder[sessionEntry, [1]any](
+	putSessionQuery, "($1, $%d, $%d)",
+)
+
+// PILOT-STATUS FORK (sessions-batch): 2 parameters per row plus our_jid.
+const sessionBatchSize = 400
+
 func (s *SQLStore) PutManySessions(ctx context.Context, sessions map[string][]byte) error {
+	if len(sessions) == 0 {
+		return nil
+	}
+	entries := make([]sessionEntry, 0, len(sessions))
+	for addr, sess := range sessions {
+		entries = append(entries, sessionEntry{Address: addr, Session: sess})
+	}
+	slices.SortFunc(entries, func(a, b sessionEntry) int { return strings.Compare(a.Address, b.Address) })
 	return s.db.DoTxn(ctx, nil, func(ctx context.Context) error {
-		for addr, sess := range sessions {
-			err := s.PutSession(ctx, addr, sess)
-			if err != nil {
+		for chunk := range slices.Chunk(entries, sessionBatchSize) {
+			query, args := putSessionsMassInsertBuilder.Build([1]any{s.JID}, chunk)
+			if _, err := s.db.Exec(ctx, query, args...); err != nil {
 				return err
 			}
 		}
