@@ -396,6 +396,12 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 		}
 	}
 
+	// PILOT-STATUS FORK (group SKD tracking): sendGroup fills it, and it is only
+	// committed below once the server accepted the message.
+	if to.Server == types.GroupServer {
+		extraParams.skd = &skdSendState{}
+	}
+
 	respChan := cli.waitResponse(req.ID)
 	var phash string
 	var data []byte
@@ -450,6 +456,9 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	resp.Timestamp = ag.UnixTime("t")
 	if errorCode := ag.Int("error"); errorCode != 0 {
 		err = fmt.Errorf("%w %d", ErrServerReturnedError, errorCode)
+	} else if extraParams.skd != nil {
+		// PILOT-STATUS FORK (group SKD tracking)
+		cli.commitSKDRecipients(ctx, extraParams.skd)
 	}
 	expectedPHash := ag.OptionalString("phash")
 	if len(expectedPHash) > 0 && phash != expectedPHash {
@@ -749,6 +758,10 @@ type nodeExtraParams struct {
 	additionalNodes *[]waBinary.Node
 	addressingMode  types.AddressingMode
 	peerRecipientPN types.JID
+
+	// PILOT-STATUS FORK (group SKD tracking): set by sendGroup when only the devices
+	// that don't hold our sender key yet should get the SKD (see send_skd.go).
+	skd *skdSendState
 }
 
 func (cli *Client) sendGroup(
@@ -761,6 +774,31 @@ func (cli *Client) sendGroup(
 	timings *MessageDebugTimings,
 	extraParams nodeExtraParams,
 ) (string, []byte, error) {
+	// PILOT-STATUS FORK (group SKD tracking): building the node is split out of sendGroup so
+	// that the device selection can be tested without a connection.
+	phash, node, err := cli.prepareGroupMessageNode(ctx, ownID, to, participants, id, message, timings, extraParams)
+	if err != nil {
+		return "", nil, err
+	}
+	start := time.Now()
+	data, err := cli.sendNodeAndGetData(ctx, *node)
+	timings.Send = time.Since(start)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to send message node: %w", err)
+	}
+	return phash, data, nil
+}
+
+func (cli *Client) prepareGroupMessageNode(
+	ctx context.Context,
+	ownID,
+	to types.JID,
+	participants []types.JID,
+	id types.MessageID,
+	message *waE2E.Message,
+	timings *MessageDebugTimings,
+	extraParams nodeExtraParams,
+) (string, *waBinary.Node, error) {
 	start := time.Now()
 	plaintext, _, err := marshalMessage(to, message)
 	timings.Marshal = time.Since(start)
@@ -784,6 +822,16 @@ func (cli *Client) sendGroup(
 	skdPlaintext, err := proto.Marshal(skdMessage)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to marshal sender key distribution message to send %s to %s: %w", id, to, err)
+	}
+
+	// PILOT-STATUS FORK (group SKD tracking): remember which sender key (ID and iteration)
+	// the SKD carries, so that only devices that don't hold it yet get it.
+	if to.Server == types.GroupServer && cli.Store.SenderKeyDistribution != nil && extraParams.skd != nil {
+		extraParams.skd.group = to
+		extraParams.skd.keyID = signalSKDMessage.ID()
+		extraParams.skd.iteration = signalSKDMessage.Iteration()
+	} else {
+		extraParams.skd = nil
 	}
 
 	cipher := groups.NewGroupCipher(builder, senderKeyName, cli.Store)
@@ -816,13 +864,7 @@ func (cli *Client) sendGroup(
 		node.Content = append(node.GetChildren(), cli.getMessageReportingToken(plaintext, message, ownID, to, id))
 	}
 
-	start = time.Now()
-	data, err := cli.sendNodeAndGetData(ctx, *node)
-	timings.Send = time.Since(start)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to send message node: %w", err)
-	}
-	return phash, data, nil
+	return phash, node, nil
 }
 
 func (cli *Client) sendPeerMessage(
@@ -1182,6 +1224,13 @@ func (cli *Client) prepareMessageNode(
 			return jid.Server == types.HostedServer || jid.Server == types.HostedLIDServer
 		})
 	}
+	// PILOT-STATUS FORK (group SKD tracking): plaintext is the SKD here; only encrypt it for
+	// devices that don't hold our current sender key. allDevices is still returned whole,
+	// since the participant hash covers every device of the group.
+	encryptDevices := allDevices
+	if extraParams.skd != nil {
+		encryptDevices = cli.filterSKDTargets(ctx, extraParams.skd, allDevices)
+	}
 
 	msgType := getTypeFromMessage(message)
 	encAttrs := waBinary.Attrs{}
@@ -1211,7 +1260,7 @@ func (cli *Client) prepareMessageNode(
 
 	start = time.Now()
 	participantNodes, includeIdentity, err := cli.encryptMessageForDevices(
-		ctx, allDevices, id, plaintext, dsmPlaintext, encAttrs,
+		ctx, encryptDevices, id, plaintext, dsmPlaintext, encAttrs,
 	)
 	timings.PeerEncrypt = time.Since(start)
 	if err != nil {
@@ -1221,12 +1270,23 @@ func (cli *Client) prepareMessageNode(
 		Tag:     "participants",
 		Content: participantNodes,
 	}
+	content := cli.getMessageContent(
+		participantNode, message, attrs, includeIdentity, extraParams,
+	)
+	if extraParams.skd != nil {
+		extraParams.skd.recordSKDRecipients(participantNodes)
+		cli.Log.Debugf("Sending sender key distribution message for %s in %s to %d of %d devices",
+			id, to, len(participantNodes), extraParams.skd.totalDevices)
+		if len(participantNodes) == 0 {
+			// Every device already holds the key: like WhatsApp Web and Baileys, send the
+			// skmsg alone instead of an empty <participants> node.
+			content = content[1:]
+		}
+	}
 	return &waBinary.Node{
-		Tag:   "message",
-		Attrs: attrs,
-		Content: cli.getMessageContent(
-			participantNode, message, attrs, includeIdentity, extraParams,
-		),
+		Tag:     "message",
+		Attrs:   attrs,
+		Content: content,
 	}, allDevices, nil
 }
 

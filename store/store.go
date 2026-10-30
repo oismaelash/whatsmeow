@@ -190,6 +190,50 @@ type LIDStore interface {
 	GetManyLIDsForPNs(ctx context.Context, pns []types.JID) (map[types.JID]types.JID, error)
 }
 
+// SKDRecipient is a device that received our sender key distribution message for a group.
+//
+// PILOT-STATUS FORK (group SKD tracking): used by SenderKeyDistributionStore.
+type SKDRecipient struct {
+	// Device is the device JID as it appears in the group device list (the wire identity).
+	Device types.JID
+	// Address is the Signal address of the session used to encrypt for the device
+	// (the LID address when a LID mapping exists). Session/identity resets for this
+	// address invalidate the entry.
+	Address string
+}
+
+// SKDState is what is known about one device's copy of our sender key in a group.
+//
+// PILOT-STATUS FORK (group SKD tracking).
+type SKDState struct {
+	KeyID     uint32
+	Iteration uint32
+	SentAt    time.Time
+}
+
+// SenderKeyDistributionStore remembers which devices already hold our current sender key
+// for each group, so that group sends only need to encrypt the SenderKeyDistributionMessage
+// for devices that don't have it yet.
+//
+// PILOT-STATUS FORK (group SKD tracking): not part of upstream whatsmeow. Implementations
+// must treat every deletion as "the device may not have the key anymore": a missing entry
+// only costs one extra encryption, an entry that is wrongly present leaves the device unable
+// to decrypt until it sends a retry receipt.
+type SenderKeyDistributionStore interface {
+	// GetSKDRecipients returns the state of every tracked device of the group (any key ID).
+	GetSKDRecipients(ctx context.Context, group types.JID) (map[types.JID]SKDState, error)
+	// PutSKDRecipients records that the given devices received the sender key keyID at the given iteration.
+	PutSKDRecipients(ctx context.Context, group types.JID, keyID, iteration uint32, recipients []SKDRecipient) error
+	// DeleteSKDRecipients forgets the given devices of a group.
+	DeleteSKDRecipients(ctx context.Context, group types.JID, devices []types.JID) error
+	// DeleteSKDRecipientsByAddress forgets the given Signal addresses in a group (or in all groups if group is empty).
+	DeleteSKDRecipientsByAddress(ctx context.Context, group types.JID, addresses []string) error
+	// DeleteSKDRecipientsForUser forgets every device of a user (PN or LID user part) in all groups.
+	DeleteSKDRecipientsForUser(ctx context.Context, user string) error
+	// DeleteAllSKDRecipients forgets every device of the group (e.g. after a sender key rotation).
+	DeleteAllSKDRecipients(ctx context.Context, group types.JID) error
+}
+
 type AllSessionSpecificStores interface {
 	IdentityStore
 	SessionStore
@@ -249,8 +293,11 @@ type Device struct {
 	PrivacyTokens PrivacyTokenStore
 	NCTSalt       NCTSaltStore
 	EventBuffer   EventBuffer
-	LIDs          LIDStore
-	Container     DeviceContainer
+	// PILOT-STATUS FORK (group SKD tracking): nil means "unknown", and every group
+	// send distributes the sender key to all devices like upstream does.
+	SenderKeyDistribution SenderKeyDistributionStore
+	LIDs                  LIDStore
+	Container             DeviceContainer
 }
 
 func (device *Device) GetJID() types.JID {
@@ -308,6 +355,8 @@ func (device *Device) SetAllStores(store AllSessionSpecificStores) {
 	device.PrivacyTokens = store
 	device.NCTSalt = store
 	device.EventBuffer = store
+	// PILOT-STATUS FORK (group SKD tracking): optional store, see SenderKeyDistributionStore.
+	device.SenderKeyDistribution, _ = store.(SenderKeyDistributionStore)
 }
 
 func (device *Device) GetAltJID(ctx context.Context, jid types.JID) (types.JID, error) {
