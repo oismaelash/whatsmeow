@@ -80,16 +80,21 @@ const (
 )
 
 func (s *SQLStore) PutIdentity(ctx context.Context, address string, key [32]byte) error {
+	// PILOT-STATUS FORK (group SKD tracking): a new identity means a reinstalled device,
+	// which no longer has our group sender keys.
+	s.invalidateSKDOnIdentityChange(ctx, address, key)
 	_, err := s.db.Exec(ctx, putIdentityQuery, s.JID, address, key[:])
 	return err
 }
 
 func (s *SQLStore) DeleteAllIdentities(ctx context.Context, phone string) error {
+	s.invalidateSKDByPhone(ctx, phone) // PILOT-STATUS FORK (group SKD tracking)
 	_, err := s.db.Exec(ctx, deleteAllIdentitiesQuery, s.JID, phone+":%")
 	return err
 }
 
 func (s *SQLStore) DeleteIdentity(ctx context.Context, address string) error {
+	s.invalidateSKDByAddress(ctx, address) // PILOT-STATUS FORK (group SKD tracking)
 	_, err := s.db.Exec(ctx, deleteAllIdentitiesQuery, s.JID, address)
 	return err
 }
@@ -254,6 +259,7 @@ func (s *SQLStore) DeleteAllSessions(ctx context.Context, phone string) error {
 }
 
 func (s *SQLStore) deleteAllSessions(ctx context.Context, phone string) error {
+	s.invalidateSKDByPhone(ctx, phone) // PILOT-STATUS FORK (group SKD tracking)
 	_, err := s.db.Exec(ctx, deleteAllSessionsQuery, s.JID, phone+":%")
 	return err
 }
@@ -269,6 +275,7 @@ func (s *SQLStore) deleteAllIdentityKeys(ctx context.Context, phone string) erro
 }
 
 func (s *SQLStore) DeleteSession(ctx context.Context, address string) error {
+	s.invalidateSKDByAddress(ctx, address) // PILOT-STATUS FORK (group SKD tracking)
 	_, err := s.db.Exec(ctx, deleteSessionQuery, s.JID, address)
 	return err
 }

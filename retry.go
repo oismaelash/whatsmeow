@@ -217,6 +217,12 @@ func (cli *Client) handleRetryReceipt(ctx context.Context, receipt *events.Recei
 	if !ag.OK() {
 		return ag.Error()
 	}
+	// PILOT-STATUS FORK (group SKD tracking): the device failed to decrypt something we sent,
+	// so it may not hold our sender key. Forget it before anything else (even if the message
+	// can't be found for the retry below), so that the next group message carries the SKD for it.
+	if receipt.IsGroup {
+		cli.invalidateSKDForRetry(ctx, receipt.Chat, receipt.Sender)
+	}
 	msg, err := cli.getMessageForRetry(ctx, receipt, messageID)
 	if err != nil {
 		return err
