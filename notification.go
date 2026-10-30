@@ -47,6 +47,9 @@ func (cli *Client) handleEncryptNotification(ctx context.Context, node *waBinary
 		if err != nil {
 			cli.Log.Warnf("Failed to delete all sessions of %s from store after identity change: %v", from, err)
 		}
+		// PILOT-STATUS FORK (group SKD tracking): the reinstalled devices lost our sender keys.
+		// Sessions may be stored under the other (LID/PN) form, so invalidate both.
+		cli.invalidateSKDForUser(ctx, from)
 		ts := node.AttrGetter().UnixTime("t")
 		storageLID := cli.resolveTCTokenStorageLID(ctx, from)
 		pt, err := cli.Store.PrivacyTokens.GetPrivacyToken(ctx, storageLID)

@@ -20,6 +20,7 @@ import (
 
 	"go.mau.fi/whatsmeow/proto/waAdv"
 	"go.mau.fi/whatsmeow/store"
+	"go.mau.fi/whatsmeow/store/sqlstore/pilotupgrades"
 	"go.mau.fi/whatsmeow/store/sqlstore/upgrades"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/util/keys"
@@ -116,7 +117,18 @@ func (c *Container) Upgrade(ctx context.Context) error {
 		}
 	}
 
-	return c.db.Upgrade(ctx)
+	err := c.db.Upgrade(ctx)
+	if err != nil {
+		return err
+	}
+	// PILOT-STATUS FORK (group SKD tracking): fork-only tables live in their own version
+	// table so that upstream migrations can keep their numbering. They reference
+	// whatsmeow_device, so they must be upgraded after the upstream schema.
+	err = c.db.Child(pilotupgrades.VersionTable, pilotupgrades.Table, nil).Upgrade(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to upgrade fork-only schema: %w", err)
+	}
+	return nil
 }
 
 const getAllDevicesQuery = `
