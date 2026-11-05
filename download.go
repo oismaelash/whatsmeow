@@ -311,7 +311,24 @@ func (cli *Client) downloadAndDecrypt(
 			err = ErrInvalidUnencryptedMediaSHA256
 		}
 	} else if err = validateMedia(iv, ciphertext, macKey, mac); err != nil {
-
+		// ⛔ CHANNEL (newsletter) media travels IN CLEAR, but a forward of it can still
+		// carry a `mediaKey` (and no `fileEncSHA256`). The `mediaKey != nil` predicate
+		// above (ce44a46) then splits the last 10 bytes off as a MAC that does not exist,
+		// and the HMAC fails on every host. Measured 05/11/2026: 140 of 146 media losses
+		// of one number in 7 days, all forwarded channel media, keyShape = mediaKey 44,
+		// fileEncSHA256 absent, fileSHA256 present, forwardedNewsletterMessageInfo present.
+		//
+		// Only here, and only when the PLAINTEXT hash proves it: the whole blob (ciphertext
+		// plus the 10 bytes taken as MAC) must hash to `fileSHA256`. A blob that is really
+		// encrypted can never match the hash of its own plaintext, so this cannot hand back
+		// ciphertext as media, and integrity stays verified — by fileSHA256 instead of HMAC.
+		if errors.Is(err, ErrInvalidMediaHMAC) && fileEncSHA256 == nil && len(fileSHA256) == 32 {
+			whole := make([]byte, 0, len(ciphertext)+len(mac))
+			whole = append(append(whole, ciphertext...), mac...)
+			if sha256.Sum256(whole) == *(*[32]byte)(fileSHA256) {
+				data, err = whole, nil
+			}
+		}
 	} else if data, err = cbcutil.Decrypt(cipherKey, iv, ciphertext); err != nil {
 		err = fmt.Errorf("failed to decrypt file: %w", err)
 	} else if len(fileSHA256) != 32 || sha256.Sum256(data) != *(*[32]byte)(fileSHA256) {
