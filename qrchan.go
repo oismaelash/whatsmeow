@@ -92,7 +92,9 @@ func (qrc *qrChannel) emitQRs(codes []string) {
 			timeout = 60 * time.Second
 		}
 		nextCode, codes = codes[0], codes[1:]
-		qrc.log.Debugf("Emitting QR code %s", nextCode)
+		// PILOT-STATUS FORK: never log the code itself. Whoever scans it links
+		// their account to this companion; it must only reach the QR channel.
+		qrc.log.Debugf("Emitting QR code (length: %d, timeout: %s, remaining: %d)", len(nextCode), timeout, len(codes))
 		select {
 		case qrc.output <- QRChannelItem{Code: nextCode, Timeout: timeout, Event: QRChannelEventCode}:
 		default:
