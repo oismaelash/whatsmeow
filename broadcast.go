@@ -44,6 +44,32 @@ func (cli *Client) getBroadcastListParticipants(ctx context.Context, jid types.J
 	return list, nil
 }
 
+// explicitBroadcastParticipants dedupes the given recipients (as non-AD JIDs) and makes
+// sure the own JID is included, mirroring getBroadcastListParticipants.
+func (cli *Client) explicitBroadcastParticipants(recipients []types.JID) ([]types.JID, error) {
+	ownID := cli.getOwnID().ToNonAD()
+	if ownID.IsEmpty() {
+		return nil, ErrNotLoggedIn
+	}
+	seen := make(map[types.JID]struct{}, len(recipients)+1)
+	list := make([]types.JID, 0, len(recipients)+1)
+	for _, jid := range recipients {
+		jid = jid.ToNonAD()
+		if jid.IsEmpty() {
+			continue
+		}
+		if _, ok := seen[jid]; ok {
+			continue
+		}
+		seen[jid] = struct{}{}
+		list = append(list, jid)
+	}
+	if _, ok := seen[ownID]; !ok {
+		list = append(list, ownID)
+	}
+	return list, nil
+}
+
 func (cli *Client) getStatusBroadcastRecipients(ctx context.Context) ([]types.JID, error) {
 	statusPrivacyOptions, err := cli.GetStatusPrivacy(ctx)
 	if err != nil {
