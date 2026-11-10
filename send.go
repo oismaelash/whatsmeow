@@ -154,6 +154,10 @@ type SendRequestExtra struct {
 	MediaHandle string
 
 	Meta *types.MsgMetaInfo
+	// BroadcastRecipients overrides the recipient list computed from the status privacy
+	// settings when sending to types.StatusBroadcastJID. The own JID is always added.
+	// Ignored for any other destination.
+	BroadcastRecipients []types.JID
 	// use this only if you know what you are doing
 	AdditionalNodes *[]waBinary.Node
 }
@@ -311,6 +315,11 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 				ownID = cli.getOwnLID()
 				// Why is this set to PN?
 				extraParams.addressingMode = types.AddressingModePN
+			}
+		} else if to == types.StatusBroadcastJID && len(req.BroadcastRecipients) > 0 {
+			groupParticipants, err = cli.explicitBroadcastParticipants(req.BroadcastRecipients)
+			if err != nil {
+				return
 			}
 		} else {
 			groupParticipants, err = cli.getBroadcastListParticipants(ctx, to)
