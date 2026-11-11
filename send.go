@@ -472,6 +472,9 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	expectedPHash := ag.OptionalString("phash")
 	if len(expectedPHash) > 0 && phash != expectedPHash {
 		cli.Log.Warnf("Server returned different participant list hash (%s != %s) when sending to %s. Some devices may not have received the message.", phash, expectedPHash, to)
+		if to == types.StatusBroadcastJID && extraParams.sentDevices != nil {
+			cli.Log.Warnf("Status %s was encrypted for %s", req.ID, summarizeDevices(extraParams.sentDevices))
+		}
 		switch to.Server {
 		case types.GroupServer:
 			// TODO also invalidate device list caches
@@ -771,6 +774,10 @@ type nodeExtraParams struct {
 	// PILOT-STATUS FORK (group SKD tracking): set by sendGroup when only the devices
 	// that don't hold our sender key yet should get the SKD (see send_skd.go).
 	skd *skdSendState
+
+	// PILOT-STATUS FORK (status diagnostics): the devices the message was encrypted for,
+	// kept only for status@broadcast so a participant-hash mismatch can say which ones.
+	sentDevices []types.JID
 }
 
 func (cli *Client) sendGroup(
@@ -860,6 +867,9 @@ func (cli *Client) prepareGroupMessageNode(
 
 	phash := participantListHashV2(allDevices)
 	node.Attrs["phash"] = phash
+	if to == types.StatusBroadcastJID {
+		extraParams.sentDevices = allDevices
+	}
 	skMsg := waBinary.Node{
 		Tag:     "enc",
 		Content: ciphertext,
