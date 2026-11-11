@@ -410,6 +410,9 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	if to.Server == types.GroupServer {
 		extraParams.skd = &skdSendState{}
 	}
+	if to == types.StatusBroadcastJID {
+		extraParams.sentDevices = &[]types.JID{}
+	}
 
 	respChan := cli.waitResponse(req.ID)
 	var phash string
@@ -472,8 +475,8 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	expectedPHash := ag.OptionalString("phash")
 	if len(expectedPHash) > 0 && phash != expectedPHash {
 		cli.Log.Warnf("Server returned different participant list hash (%s != %s) when sending to %s. Some devices may not have received the message.", phash, expectedPHash, to)
-		if to == types.StatusBroadcastJID && extraParams.sentDevices != nil {
-			cli.Log.Warnf("Status %s was encrypted for %s", req.ID, summarizeDevices(extraParams.sentDevices))
+		if extraParams.sentDevices != nil {
+			cli.Log.Warnf("Status %s was encrypted for %s", req.ID, summarizeDevices(*extraParams.sentDevices))
 		}
 		switch to.Server {
 		case types.GroupServer:
@@ -777,7 +780,9 @@ type nodeExtraParams struct {
 
 	// PILOT-STATUS FORK (status diagnostics): the devices the message was encrypted for,
 	// kept only for status@broadcast so a participant-hash mismatch can say which ones.
-	sentDevices []types.JID
+	// A pointer: nodeExtraParams is passed BY VALUE, so a plain slice set deep in
+	// prepareGroupMessageNode never reached the caller (prod 11/11: the log never fired).
+	sentDevices *[]types.JID
 }
 
 func (cli *Client) sendGroup(
@@ -867,8 +872,8 @@ func (cli *Client) prepareGroupMessageNode(
 
 	phash := participantListHashV2(allDevices)
 	node.Attrs["phash"] = phash
-	if to == types.StatusBroadcastJID {
-		extraParams.sentDevices = allDevices
+	if extraParams.sentDevices != nil {
+		*extraParams.sentDevices = allDevices
 	}
 	skMsg := waBinary.Node{
 		Tag:     "enc",
