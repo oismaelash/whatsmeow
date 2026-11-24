@@ -29,10 +29,10 @@ import (
 
 // Container is a wrapper for a SQL database that can contain multiple whatsmeow sessions.
 type Container struct {
-	db *dbutil.Database
-	log waLog.Logger
+	db     *dbutil.Database
+	log    waLog.Logger
 	LIDMap *CachedLIDMap
-	owned bool
+	owned  bool
 }
 
 var _ store.DeviceContainer = (*Container)(nil)
