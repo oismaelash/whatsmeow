@@ -155,12 +155,10 @@ func (cli *Client) DownloadThumbnail(ctx context.Context, msg DownloadableThumbn
 	if !ok {
 		return nil, fmt.Errorf("%w '%s'", ErrUnknownMediaType, string(msg.ProtoReflect().Descriptor().Name()))
 	} else if len(msg.GetThumbnailDirectPath()) > 0 {
+		// PILOT-STATUS FORK (download predicate): keep the mediaKey even without
+		// ThumbnailEncSHA256, same reasoning as in Download.
 		encSHA256 := msg.GetThumbnailEncSHA256()
 		mediaKey := msg.GetMediaKey()
-		// TODO more proper check for unencrypted media? (also Download and DownloadToFile)
-		if encSHA256 == nil && mediaKey != nil {
-			mediaKey = nil
-		}
 		return cli.DownloadMediaWithPath(
 			ctx, msg.GetThumbnailDirectPath(), encSHA256, msg.GetThumbnailSHA256(), mediaKey,
 			mediaType, mediaTypeToMMSType[mediaType], false,
@@ -221,12 +219,15 @@ func (cli *Client) Download(ctx context.Context, msg DownloadableMessage) ([]byt
 	if len(msg.GetDirectPath()) == 0 {
 		return nil, ErrNoURLPresent
 	}
+	// PILOT-STATUS FORK (download predicate): upstream (72f22e6/1f6240e) drops the
+	// mediaKey here when there is no encSHA256, i.e. treats such media as plain. The
+	// fork measured the opposite in production: forwarded media and messages that
+	// reference existing media carry a mediaKey and no encSHA256 and ARE encrypted
+	// (see downloadPossiblyEncryptedMediaWithRetries). Plain channel media with a
+	// mediaKey is handled in downloadAndDecrypt by the fileSHA256-proven fallback.
+	// Keep the mediaKey; see download_entrypoint_test.go.
 	encSHA256 := msg.GetFileEncSHA256()
 	mediaKey := msg.GetMediaKey()
-	// TODO more proper check for unencrypted media? (also DownloadToFile)
-	if encSHA256 == nil && mediaKey != nil {
-		mediaKey = nil
-	}
 	return cli.DownloadMediaWithPath(
 		ctx, msg.GetDirectPath(), encSHA256, msg.GetFileSHA256(), mediaKey,
 		mediaType, mediaTypeToMMSType[mediaType], false,
